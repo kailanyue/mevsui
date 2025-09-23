@@ -45,11 +45,20 @@ use crate::authority::authority_store_tables::LiveObject;
 use crate::authority::backpressure::BackpressureManager;
 use crate::authority::epoch_start_configuration::{EpochFlag, EpochStartConfiguration};
 use crate::authority::AuthorityStore;
-use crate::fallback_fetch::{do_fallback_lookup, do_fallback_lookup_fallible};
 use crate::cache_update_handler::{pool_related_object_ids, POOL_RELATED_OBJECTS_PATH};
+use crate::fallback_fetch::{do_fallback_lookup, do_fallback_lookup_fallible};
 use crate::global_state_hasher::GlobalStateHashStore;
 use crate::transaction_outputs::TransactionOutputs;
 
+use super::cache_types::Ticket;
+use super::ExecutionCacheAPI;
+use super::{
+    cache_types::{CacheResult, CachedVersionMap, IsNewer, MonotonicCache},
+    implement_passthrough_traits,
+    object_locks::ObjectLocks,
+    Batch, CheckpointCache, ExecutionCacheCommit, ExecutionCacheMetrics, ExecutionCacheReconfigAPI,
+    ExecutionCacheWrite, ObjectCacheRead, StateSyncAPI, TestingAPI, TransactionCacheRead,
+};
 use dashmap::mapref::entry::Entry as DashMapEntry;
 use dashmap::DashMap;
 use dashmap::DashSet;
@@ -62,8 +71,8 @@ use parking_lot::Mutex;
 use std::collections::{BTreeMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::hash::Hash;
-use std::sync::atomic::AtomicU64;
 use std::io::Write;
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use sui_config::ExecutionCacheConfig;
 use sui_macros::fail_point;
@@ -89,15 +98,6 @@ use sui_types::transaction::{TransactionDataAPI, VerifiedSignedTransaction, Veri
 use tap::TapOptional;
 use tracing::{debug, info, instrument, trace, warn};
 use typed_store::Map;
-use super::cache_types::Ticket;
-use super::ExecutionCacheAPI;
-use super::{
-    cache_types::{CacheResult, CachedVersionMap, IsNewer, MonotonicCache},
-    implement_passthrough_traits,
-    object_locks::ObjectLocks,
-    Batch, CheckpointCache, ExecutionCacheCommit, ExecutionCacheMetrics, ExecutionCacheReconfigAPI,
-    ExecutionCacheWrite, ObjectCacheRead, StateSyncAPI, TestingAPI, TransactionCacheRead,
-};
 
 #[cfg(test)]
 #[path = "unit_tests/writeback_cache_tests.rs"]
@@ -795,6 +795,10 @@ impl WritebackCache {
                         .map(|e| e.is_tombstone())
                         .unwrap_or(false);
 
+                println!(
+                    "highest: {:?}, cache_entry: {:?}, tombstone_possibly_pruned: {:?}",
+                    highest, cache_entry, tombstone_possibly_pruned
+                );
                 if highest != cache_entry && !tombstone_possibly_pruned {
                     tracing::error!(
                         ?highest,
