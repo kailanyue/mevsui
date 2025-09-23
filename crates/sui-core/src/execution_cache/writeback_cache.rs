@@ -596,7 +596,7 @@ impl WritebackCache {
         std::mem::swap(self, &mut new);
     }
 
-    fn write_object_entry(
+    async fn write_object_entry(
         &self,
         object_id: &ObjectID,
         version: SequenceNumber,
@@ -626,8 +626,6 @@ impl WritebackCache {
         //   the tx finalizer, plus checkpoint executor, consensus, and RPCs from fullnodes.
         let mut entry = self.dirty.objects.entry(*object_id).or_default();
 
-        entry.insert(version, object.clone());
-
         self.object_by_id_cache
             .insert(
                 object_id,
@@ -637,6 +635,8 @@ impl WritebackCache {
             // While Ticket::Write cannot expire, this insert may still fail.
             // See the comment in `MonotonicCache::insert`.
             .ok();
+
+        entry.insert(version, object.clone());
 
         if let ObjectEntry::Object(object) = &object {
             if object.is_package() {
