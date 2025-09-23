@@ -1347,6 +1347,15 @@ impl WritebackCache {
         object: LatestObjectCacheEntry,
         ticket: Ticket,
     ) {
+        if let Some(current_entry) = self.object_by_id_cache.get(object_id) {
+            if !object.is_newer_than(&*current_entry.lock()) {
+                // 如果我们要插入的值并不比当前的值新，就直接返回，防止覆盖
+                trace!("discarded cache write due to stale data");
+                self.metrics.record_ticket_expiry(); // 或者一个新的 metric
+                return;
+            }
+        }
+
         trace!("caching object by id: {:?} {:?}", object_id, object);
         if self
             .object_by_id_cache
