@@ -596,7 +596,7 @@ impl WritebackCache {
         std::mem::swap(self, &mut new);
     }
 
-    async fn write_object_entry(
+    fn write_object_entry(
         &self,
         object_id: &ObjectID,
         version: SequenceNumber,
@@ -624,8 +624,9 @@ impl WritebackCache {
         //   code might spin for a surprisingly long time.
         // - Additionally, many concurrent re-executions of the same tx could happen due to
         //   the tx finalizer, plus checkpoint executor, consensus, and RPCs from fullnodes.
-        let mut dirty_map = self.dirty.objects.entry(*object_id).or_default();
-        dirty_map.insert(version, object.clone());
+        let mut entry = self.dirty.objects.entry(*object_id).or_default();
+
+        entry.insert(version, object.clone());
 
         self.object_by_id_cache
             .insert(
@@ -765,51 +766,66 @@ impl WritebackCache {
             .record_cache_request(request_type, "object_by_id");
         let entry = self.object_by_id_cache.get(object_id);
 
-        // if cfg!(debug_assertions) {
-        //     if let Some(entry) = &entry {
-        //         // check that cache is coherent
-        //         let highest: Option<ObjectEntry> = self
-        //             .dirty
-        //             .objects
-        //             .get(object_id)
-        //             .and_then(|entry| entry.get_highest().map(|(_, o)| o.clone()))
-        //             .or_else(|| {
-        //                 let obj: Option<ObjectEntry> = self
-        //                     .store
-        //                     .get_latest_object_or_tombstone(*object_id)
-        //                     .unwrap()
-        //                     .map(|(_, o)| o.into());
-        //                 obj
-        //             });
+        if cfg!(debug_assertions) {
+            if let Some(entry) = &entry {
+                // check that cache is coherent
+                let highest: Option<ObjectEntry> = self
+                    .dirty
+                    .objects
+                    .get(object_id)
+                    .and_then(|entry| entry.get_highest().map(|(_, o)| o.clone()))
+                    .or_else(|| {
+                        let obj: Option<ObjectEntry> = self
+                            .store
+                            .get_latest_object_or_tombstone(*object_id)
+                            .unwrap()
+                            .map(|(_, o)| o.into());
+                        obj
+                    });
 
-        //         let cache_entry = match &*entry.lock() {
-        //             LatestObjectCacheEntry::Object(_, entry) => Some(entry.clone()),
-        //             LatestObjectCacheEntry::NonExistent => None,
-        //         };
+                let cache_entry = match &*entry.lock() {
+                    LatestObjectCacheEntry::Object(_, entry) => Some(entry.clone()),
+                    LatestObjectCacheEntry::NonExistent => None,
+                };
 
-        //         // If the cache entry is a tombstone, the db entry may be missing if it was pruned.
-        //         let tombstone_possibly_pruned = highest.is_none()
-        //             && cache_entry
-        //                 .as_ref()
-        //                 .map(|e| e.is_tombstone())
-        //                 .unwrap_or(false);
+                // If the cache entry is a tombstone, the db entry may be missing if it was pruned.
+                let tombstone_possibly_pruned = highest.is_none()
+                    && cache_entry
+                        .as_ref()
+                        .map(|e| e.is_tombstone())
+                        .unwrap_or(false);
 
-        //         println!(
-        //             "highest: {:?}, cache_entry: {:?}, tombstone_possibly_pruned: {:?}",
-        //             highest, cache_entry, tombstone_possibly_pruned
-        //         );
-        //         if highest != cache_entry && !tombstone_possibly_pruned {
-        //             tracing::error!(
-        //                 ?highest,
-        //                 ?cache_entry,
-        //                 ?tombstone_possibly_pruned,
-        //                 "object_by_id cache is incoherent for {:?}",
-        //                 object_id
-        //             );
-        //             panic!("object_by_id cache is incoherent for {:?}", object_id);
-        //         }
-        //     }
-        // }
+                // if highest != cache_entry && !tombstone_possibly_pruned {
+                //     tracing::error!(
+                //         ?highest,
+                //         ?cache_entry,
+                //         ?tombstone_possibly_pruned,
+                //         "object_by_id cache is incoherent for {:?}",
+                //         object_id
+                //     );
+                //     panic!("object_by_id cache is incoherent for {:?}", object_id);
+                // }
+
+                let highest_seq = highest.as_ref().and_then(|e| match e {
+                    ObjectEntry::Object(o) => Some(o.version()),
+                    _ => None,
+                });
+                let cache_seq = cache_entry.as_ref().and_then(|e| match e {
+                    ObjectEntry::Object(o) => Some(o.version()),
+                    _ => None,
+                });
+
+                if let (Some(hs), Some(cs)) = (highest_seq, cache_seq) {
+                    // 只有当 cache 真的「落后」于最高版本时才报警
+                    if cs < hs && !tombstone_possibly_pruned {
+                        panic!(
+                            "object_by_id cache is behind the true highest version for {:?}: cache {}, highest {}",
+                            object_id, cs, hs
+                        );
+                    }
+                }
+            }
+        }
 
         if let Some(entry) = entry {
             let entry = entry.lock();
@@ -1346,15 +1362,6 @@ impl WritebackCache {
         object: LatestObjectCacheEntry,
         ticket: Ticket,
     ) {
-        if let Some(current_entry) = self.object_by_id_cache.get(object_id) {
-            if !object.is_newer_than(&*current_entry.lock()) {
-                // 如果我们要插入的值并不比当前的值新，就直接返回，防止覆盖
-                trace!("discarded cache write due to stale data");
-                self.metrics.record_ticket_expiry(); // 或者一个新的 metric
-                return;
-            }
-        }
-
         trace!("caching object by id: {:?} {:?}", object_id, object);
         if self
             .object_by_id_cache
