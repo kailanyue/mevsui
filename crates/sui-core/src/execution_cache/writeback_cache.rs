@@ -765,91 +765,51 @@ impl WritebackCache {
             .record_cache_request(request_type, "object_by_id");
         let entry = self.object_by_id_cache.get(object_id);
 
-        if cfg!(debug_assertions) {
-            if let Some(entry) = &entry {
-                // check that cache is coherent
-                // let highest: Option<ObjectEntry> = self
-                //     .dirty
-                //     .objects
-                //     .get(object_id)
-                //     .and_then(|entry| entry.get_highest().map(|(_, o)| o.clone()))
-                //     .or_else(|| {
-                //         let obj: Option<ObjectEntry> = self
-                //             .store
-                //             .get_latest_object_or_tombstone(*object_id)
-                //             .unwrap()
-                //             .map(|(_, o)| o.into());
-                //         obj
-                //     });
+        // if cfg!(debug_assertions) {
+        //     if let Some(entry) = &entry {
+        //         // check that cache is coherent
+        //         let highest: Option<ObjectEntry> = self
+        //             .dirty
+        //             .objects
+        //             .get(object_id)
+        //             .and_then(|entry| entry.get_highest().map(|(_, o)| o.clone()))
+        //             .or_else(|| {
+        //                 let obj: Option<ObjectEntry> = self
+        //                     .store
+        //                     .get_latest_object_or_tombstone(*object_id)
+        //                     .unwrap()
+        //                     .map(|(_, o)| o.into());
+        //                 obj
+        //             });
 
-                let get_version = |o: &ObjectEntry| -> Option<SequenceNumber> {
-                    match o {
-                        ObjectEntry::Object(obj) => Some(obj.version()),
-                        _ => None, // Tomstones don't have an easily accessible version here
-                    }
-                };
+        //         let cache_entry = match &*entry.lock() {
+        //             LatestObjectCacheEntry::Object(_, entry) => Some(entry.clone()),
+        //             LatestObjectCacheEntry::NonExistent => None,
+        //         };
 
-                // 1. 从 dirty 缓存中获取最高版本
-                let dirty_opt = self
-                    .dirty
-                    .objects
-                    .get(object_id)
-                    .and_then(|e| e.get_highest().cloned());
+        //         // If the cache entry is a tombstone, the db entry may be missing if it was pruned.
+        //         let tombstone_possibly_pruned = highest.is_none()
+        //             && cache_entry
+        //                 .as_ref()
+        //                 .map(|e| e.is_tombstone())
+        //                 .unwrap_or(false);
 
-                // 2. 从 cached 缓存中获取最高版本
-                let cached_opt = self
-                    .cached
-                    .object_cache
-                    .get(object_id)
-                    .and_then(|e| e.lock().get_highest().cloned());
-
-                // 3. 从 store (数据库) 中获取最高版本
-                let store_opt = self
-                    .store
-                    .get_latest_object_or_tombstone(*object_id)
-                    .unwrap()
-                    .map(|(key, o)| (key.1, o.into()));
-
-                // 4. 比较所有来源，找到真正的最高版本
-                let mut candidates = [dirty_opt, cached_opt, store_opt];
-                candidates.sort_by(|a, b| {
-                    let v_a = a.as_ref().map(|(v, _)| *v).unwrap_or(SequenceNumber::MIN);
-                    let v_b = b.as_ref().map(|(v, _)| *v).unwrap_or(SequenceNumber::MIN);
-                    v_a.cmp(&v_b)
-                });
-
-                let highest = candidates
-                    .last()
-                    .and_then(|opt| opt.as_ref().map(|(_, entry)| entry.clone()));
-
-                let cache_entry = match &*entry.lock() {
-                    LatestObjectCacheEntry::Object(_, entry) => Some(entry.clone()),
-                    LatestObjectCacheEntry::NonExistent => None,
-                };
-
-                // If the cache entry is a tombstone, the db entry may be missing if it was pruned.
-                let tombstone_possibly_pruned = highest.is_none()
-                    && cache_entry
-                        .as_ref()
-                        .map(|e| e.is_tombstone())
-                        .unwrap_or(false);
-
-                println!(
-                    "highest: {:?}, cache_entry: {:?}, tombstone_possibly_pruned: {:?}",
-                    highest, cache_entry, tombstone_possibly_pruned
-                );
-                if highest != cache_entry && !tombstone_possibly_pruned {
-                    tracing::error!(
-                        ?highest,
-                        ?cache_entry,
-                        ?tombstone_possibly_pruned,
-                        "object_by_id cache is incoherent for {:?}",
-                        object_id
-                    );
-                    panic!("object_by_id cache is incoherent for {:?}", object_id);
-                }
-            }
-        }
+        //         println!(
+        //             "highest: {:?}, cache_entry: {:?}, tombstone_possibly_pruned: {:?}",
+        //             highest, cache_entry, tombstone_possibly_pruned
+        //         );
+        //         if highest != cache_entry && !tombstone_possibly_pruned {
+        //             tracing::error!(
+        //                 ?highest,
+        //                 ?cache_entry,
+        //                 ?tombstone_possibly_pruned,
+        //                 "object_by_id cache is incoherent for {:?}",
+        //                 object_id
+        //             );
+        //             panic!("object_by_id cache is incoherent for {:?}", object_id);
+        //         }
+        //     }
+        // }
 
         if let Some(entry) = entry {
             let entry = entry.lock();
