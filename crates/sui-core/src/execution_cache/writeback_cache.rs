@@ -624,7 +624,8 @@ impl WritebackCache {
         //   code might spin for a surprisingly long time.
         // - Additionally, many concurrent re-executions of the same tx could happen due to
         //   the tx finalizer, plus checkpoint executor, consensus, and RPCs from fullnodes.
-        let mut entry = self.dirty.objects.entry(*object_id).or_default();
+        let mut dirty_map = self.dirty.objects.entry(*object_id).or_default();
+        dirty_map.insert(version, object.clone());
 
         self.object_by_id_cache
             .insert(
@@ -635,8 +636,6 @@ impl WritebackCache {
             // While Ticket::Write cannot expire, this insert may still fail.
             // See the comment in `MonotonicCache::insert`.
             .ok();
-
-        entry.insert(version, object.clone());
 
         if let ObjectEntry::Object(object) = &object {
             if object.is_package() {
@@ -769,19 +768,38 @@ impl WritebackCache {
         if cfg!(debug_assertions) {
             if let Some(entry) = &entry {
                 // check that cache is coherent
-                let highest: Option<ObjectEntry> = self
-                    .dirty
-                    .objects
-                    .get(object_id)
-                    .and_then(|entry| entry.get_highest().map(|(_, o)| o.clone()))
-                    .or_else(|| {
-                        let obj: Option<ObjectEntry> = self
-                            .store
-                            .get_latest_object_or_tombstone(*object_id)
-                            .unwrap()
-                            .map(|(_, o)| o.into());
-                        obj
-                    });
+                // let highest: Option<ObjectEntry> = self
+                //     .dirty
+                //     .objects
+                //     .get(object_id)
+                //     .and_then(|entry| entry.get_highest().map(|(_, o)| o.clone()))
+                //     .or_else(|| {
+                //         let obj: Option<ObjectEntry> = self
+                //             .store
+                //             .get_latest_object_or_tombstone(*object_id)
+                //             .unwrap()
+                //             .map(|(_, o)| o.into());
+                //         obj
+                //     });
+
+                let highest: Option<ObjectEntry> =
+                    self.dirty
+                        .objects
+                        .get(object_id)
+                        .and_then(|entry| entry.get_highest().map(|(_, o)| o.clone()))
+                        .or_else(|| {
+                            self.cached.object_cache.get(object_id).and_then(|entry| {
+                                entry.lock().get_highest().map(|(_, o)| o.clone())
+                            })
+                        })
+                        .or_else(|| {
+                            let obj: Option<ObjectEntry> = self
+                                .store
+                                .get_latest_object_or_tombstone(*object_id)
+                                .unwrap()
+                                .map(|(_, o)| o.into());
+                            obj
+                        });
 
                 let cache_entry = match &*entry.lock() {
                     LatestObjectCacheEntry::Object(_, entry) => Some(entry.clone()),
